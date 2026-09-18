@@ -26,10 +26,10 @@ app.post("/api/detect", upload.single("image"), async (req, res) => {
     formData.append("file", req.file.buffer, req.file.originalname);
 
     const response = await axios.post(
-      "http://localhost:8000/predict",
-      formData,
-      { headers: formData.getHeaders() }
-    );
+  `${process.env.MODEL_SERVICE_URL}/predict`,
+  formData,
+  { headers: formData.getHeaders() }
+);
 
     res.json(response.data);
   } catch (err) {
