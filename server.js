@@ -6,35 +6,68 @@ const multer = require("multer");
 const axios = require("axios");
 const FormData = require("form-data");
 const mongoose = require("mongoose");
-const requireAuth = require("./src/middlewares/authMiddleware");
 
 const authRoutes = require("./src/routes/authRoutes");
 
+// Set MODEL_SERVICE_URL on Render, e.g. https://gap-detection-model.onrender.com
+const MODEL_SERVICE_URL = (
+  process.env.MODEL_SERVICE_URL || "https://gap-detection-model.onrender.com"
+).replace(/\/$/, "");
+
 const app = express();
-app.use(cors());
+app.use(cors({ origin: process.env.CLIENT_ORIGIN || true }));
 app.use(express.json());
 
 // ---------- Auth ----------
 app.use("/api/auth", authRoutes);
 
-// ---------- Detection (unchanged) ----------
-const upload = multer(); // stores file in memory, not on disk
+// ---------- Detection ----------
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 },
+});
+
+const ALLOWED_TYPES = ["image/jpeg", "image/png", "application/pdf"];
 
 app.post("/api/detect", upload.single("image"), async (req, res) => {
   try {
-    const formData = new FormData();
-    formData.append("file", req.file.buffer, req.file.originalname);
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-    const response = await axios.post(
-  `${process.env.MODEL_SERVICE_URL}/predict`,
-  formData,
-  { headers: formData.getHeaders() }
-);
+    if (!ALLOWED_TYPES.includes(req.file.mimetype)) {
+      return res.status(400).json({ error: "Only JPG, PNG or PDF files are allowed" });
+    }
+
+    // spacing values arrive in FEET
+    const rowSpacingFt = parseFloat(req.body.rowSpacingFt);
+    const plantSpacingFt = parseFloat(req.body.plantSpacingFt);
+    if (!(rowSpacingFt > 0) || !(plantSpacingFt > 0)) {
+      return res.status(400).json({ error: "Row spacing and plant spacing (ft) are required" });
+    }
+
+    const formData = new FormData();
+    formData.append("file", req.file.buffer, {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+    });
+    formData.append("row_spacing_ft", String(rowSpacingFt));
+    formData.append("plant_spacing_ft", String(plantSpacingFt));
+    formData.append("confidence", req.body.confidence ?? "0.25");
+
+    const response = await axios.post(`${MODEL_SERVICE_URL}/predict`, formData, {
+      headers: formData.getHeaders(),
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      timeout: 180000,
+    });
 
     res.json(response.data);
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: "Detection failed" });
+    console.error(err.response?.data || err.message);
+    const status = err.response?.status || 500;
+    const detail = err.response?.data?.detail;
+    res.status(status).json({
+      error: typeof detail === "string" ? detail : "Detection failed",
+    });
   }
 });
 
